@@ -1,0 +1,16 @@
+LLVNR-Model-Research
+Copyright 2026 21Z121Z1
+
+This repository contains independent research and interoperability code. It
+is not an Apple product and is not endorsed by Apple. Apple, Apple Neural
+Engine, iPhone, macOS, and related marks are trademarks of Apple Inc. The
+repository does not grant rights to Apple firmware, model weights, tuning
+data, model files, or other third-party material.
+
+ANEForge portions are Copyright (c) 2026 Spencer H. Bryngelson and are
+distributed under the MIT License. See third_party/ANEForge/LICENSE and
+third_party/ANEForge/NOTICE.
+
+The project name and the AppleNeuralHash2ONNX reference describe an engineering
+model only. They are not a legal opinion and do not imply affiliation,
+authorization, or endorsement.

@@ -1,0 +1,9 @@
+.build/
+dist/
+Validation/runs/
+Validation/reference/
+Sources/LLVNRDemo/Resources/Model/cache/
+.DS_Store
+
+__pycache__/
+*.pyc

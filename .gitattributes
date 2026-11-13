@@ -1,0 +1,9 @@
+* text=auto
+*.swift text
+*.py text
+*.md text
+*.json text
+*.metal text
+*.mm text
+*.h text
+*.sh text eol=lf
