@@ -31,20 +31,29 @@ IGNORED_SUFFIXES = {".pyc", ".pyo", ".swiftmodule", ".swiftdoc", ".dia", ".pcm",
 EMAIL = re.compile(rb"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.I)
 SECRET = re.compile(rb"BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY")
 TOKEN = re.compile(rb"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9]{20,})\b")
+# CI hosts use generic account names such as "runner". Treating those as
+# personal identity would flag ordinary prose (for example, "experiment
+# runner") without improving privacy detection.
+GENERIC_IDENTITIES = {"runner", "user", "root", "admin", "builder", "build", "github"}
 
 
 def identities() -> set[bytes]:
     home = Path.home()
-    values = {str(home), home.name}
+    values = {str(home)}
+    if home.name.lower() not in GENERIC_IDENTITIES:
+        values.add(home.name)
     try:
         gecos = pwd.getpwuid(os.getuid()).pw_gecos.split(",", 1)[0]
-        if gecos:
+        if gecos and gecos.lower() not in GENERIC_IDENTITIES:
             values.add(gecos)
     except (KeyError, OSError):
         pass
     host = socket.gethostname()
-    values.add(host)
-    values.add(host.split(".", 1)[0])
+    if host.lower() not in GENERIC_IDENTITIES:
+        values.add(host)
+    host_short = host.split(".", 1)[0]
+    if host_short.lower() not in GENERIC_IDENTITIES:
+        values.add(host_short)
     return {value.encode() for value in values if len(value) >= 3}
 
 
