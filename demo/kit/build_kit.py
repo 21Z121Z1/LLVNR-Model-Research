@@ -16,7 +16,7 @@ import shutil
 import sys
 import tempfile
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 
 SCHEMA_VERSION = 1
@@ -42,10 +42,12 @@ def read_json(path: Path) -> dict:
 
 
 def safe_relative(value: str) -> Path:
-    path = Path(value)
-    if path.is_absolute() or ".." in path.parts or not path.parts:
-        raise ValueError(f"unsafe relative path: {value}")
-    return path
+    if not isinstance(value, str) or not value or "\\" in value:
+        raise ValueError(f"unsafe relative path: {value!r}")
+    path = PurePosixPath(value)
+    if path.is_absolute() or ".." in path.parts or "." in path.parts or not path.parts:
+        raise ValueError(f"unsafe relative path: {value!r}")
+    return Path(*path.parts)
 
 
 def files_under(root: Path) -> dict[str, dict]:
@@ -87,6 +89,15 @@ def validate_manifest(model_id: str, manifest: dict, report: dict) -> None:
     padded_width, padded_height = current["shape"][3] * 2, current["shape"][2] * 2
     if (padded_width, padded_height) not in ((2304, 1296), (2464, 1388)):
         raise ValueError(f"{model_id}: unsupported padded canvas")
+    target_family = manifest.get("target_family")
+    target_arch = manifest.get("target_arch")
+    if (target_family is None) != (target_arch is None):
+        raise ValueError(f"{model_id}: target family and architecture must be specified together")
+    if target_family is not None:
+        if isinstance(target_family, bool) or not isinstance(target_family, int) or target_family < 2:
+            raise ValueError(f"{model_id}: invalid target family")
+        if not isinstance(target_arch, str) or not target_arch:
+            raise ValueError(f"{model_id}: invalid target architecture")
     declared = manifest.get("files")
     if not isinstance(declared, dict) or not REQUIRED_MODEL_FILES.issubset(declared):
         raise ValueError(f"{model_id}: incomplete runtime file list")
@@ -171,43 +182,58 @@ def copy_catalog(source: Path, destination: Path, selected_models: set[str]) -> 
     if len(ids) != len(set(ids)) or not selected_models.issubset(set(ids)):
         raise ValueError("catalog model IDs are missing or duplicated")
 
+    selected_entries = [entry for entry in originals if entry.get("id") in selected_models]
+    if len(selected_entries) != len(selected_models):
+        raise ValueError("catalog selection is incomplete")
+    selected_preset_ids = {
+        preset_id
+        for entry in selected_entries
+        for preset_id in entry.get("preset_ids", [])
+    }
+    presets = catalog.get("presets", [])
+    if not isinstance(presets, list):
+        raise ValueError("catalog.presets must be an array")
+    selected_presets = [preset for preset in presets if preset.get("id") in selected_preset_ids]
+    found_preset_ids = {preset.get("id") for preset in selected_presets}
+    if found_preset_ids != selected_preset_ids:
+        raise ValueError("catalog preset selection is incomplete")
+
     destination_catalog = destination / "Catalog"
     destination_catalog.mkdir(parents=True, exist_ok=True)
 
     catalog_files = catalog.get("files", {})
     if not isinstance(catalog_files, dict):
         raise ValueError("catalog.files must be an object")
-    for relative, record in catalog_files.items():
+    wanted_files = {preset["file"] for preset in selected_presets if isinstance(preset.get("file"), str)}
+    copied_files: dict[str, dict] = {}
+    for relative in sorted(wanted_files):
+        if relative not in catalog_files:
+            raise ValueError(f"catalog file record missing: {relative}")
+        record = catalog_files[relative]
         rel = safe_relative(relative)
         source_file = source / rel
-        if not source_file.is_file():
+        if not source_file.is_file() or source_file.is_symlink():
             raise ValueError(f"catalog file missing: {relative}")
         if source_file.stat().st_size != record.get("bytes") or digest(source_file) != record.get("sha256"):
             raise ValueError(f"catalog file hash mismatch: {relative}")
         copy_file(source_file, destination_catalog / rel)
+        copied_files[relative] = record
 
     camera = source / "CameraSetup.plist"
-    if camera.is_file() and "CameraSetup.plist" not in catalog_files:
-        copy_file(camera, destination_catalog / "CameraSetup.plist")
+    if camera.is_file() and not camera.is_symlink():
+        relative = "CameraSetup.plist"
+        if relative not in catalog_files:
+            copy_file(camera, destination_catalog / relative)
+            copied_files[relative] = {"sha256": digest(camera), "bytes": camera.stat().st_size}
 
-    selected_entries = [entry for entry in originals if entry.get("id") in selected_models]
-    if len(selected_entries) != len(selected_models):
-        raise ValueError("catalog selection is incomplete")
     for entry in selected_entries:
         model_id = entry["id"]
         entry["runtime_directory"] = f"Models/{model_id}"
         entry["status"] = "ported_local"
         entry["status_detail"] = "完整模型已通过本机数值验证"
     catalog["models"] = selected_entries
-
-    presets = catalog.get("presets", [])
-    if isinstance(presets, list):
-        selected_preset_ids = {
-            preset_id
-            for entry in selected_entries
-            for preset_id in entry.get("preset_ids", [])
-        }
-        catalog["presets"] = [preset for preset in presets if preset.get("id") in selected_preset_ids]
+    catalog["presets"] = selected_presets
+    catalog["files"] = copied_files
 
     if catalog.get("default_model_id") not in selected_models:
         catalog["default_model_id"] = selected_entries[0]["id"]
@@ -226,7 +252,7 @@ def build(args: argparse.Namespace) -> dict:
     assets = args.assets.resolve()
     catalog_source = args.catalog.resolve()
     output = args.output.resolve()
-    if output.exists():
+    if output.exists() or output.is_symlink():
         raise ValueError(f"output already exists: {output}")
     if not assets.is_dir() or not catalog_source.is_dir():
         raise ValueError("assets and catalog must be directories")

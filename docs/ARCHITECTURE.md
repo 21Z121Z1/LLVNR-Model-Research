@@ -2,7 +2,7 @@
 
 ## 1. 输入层
 
-使用者从自己有权使用的本地材料准备模型目录。仓库不执行固件下载、解密或镜像提取。`demo/kit/export_research_assets.py` 只桥接一个已经存在的本地研究导出器。
+使用者从自己有权使用的本地材料准备模型目录。仓库不执行固件下载、解密或镜像提取。公开路径先使用 `demo/kit/recover_portable_sources.py` 从本地 HWX 恢复 portable source graph，再由 `demo/kit/export_runtime_assets.py` 生成运行资产；`demo/kit/export_research_assets.py` 只作为旧私有研究树的兼容桥接。
 
 模型资产目录的运行时边界：
 
@@ -28,7 +28,9 @@ MODEL_ID/
 - `h19_sparse_codec.py`、`h19_sparse_extended.py`、`h19_sparse_stream.py`：稀疏 lane、mask、tile stream；
 - `h19_statewalk.py`：task state 和寄存器 walk；
 - `llvnr_ir.py`、`llvnr_taskflow.py`：task 端口、存储视图和数据依赖；
-- `recover_catalog.py`：将验证过的 coefficient group 绑定到模型 catalog；
+- `recover_catalog.py`：通用 coefficient codec 和 bounded recovery；
+- `graph/recovered_reference.py`：从本地 HWX + recovery 目录构造 task reference；
+- `recovery_profiles.json.gz`：sanitized synthetic compiler layout metadata，不含权重；
 - `parse_dump.py`：文本 task dump 转结构化 JSON。
 
 解析代码本身不等于模型推理验收。coefficient round-trip、输出数值和硬件执行是不同门槛。
@@ -52,7 +54,7 @@ his_frame + cur_frame + dnr_zoom_map + fusion_zoom_map
           out_yuv / state_yuv / state_weight_band0
 ```
 
-`portable_ops.py` 是不依赖硬件和编译器的算术参考。`portable_graph.py` 负责图构建、系数绑定、输入检查和 H13/ANE 适配。`run_portable.py` 负责递归状态、reset 和逐帧报告。`native_reference.py` 保留 task-level 对照路径。
+`portable_ops.py` 是不依赖硬件和编译器的算术参考。`portable_graph.py` 负责图构建、系数绑定、输入检查和 H13/ANE 适配。`wide1_graph.py`、`superwide05_graph.py`、`tele4_graph.py`、`tele8_graph.py` 和 `large_canvas_graph.py` 负责各模型族的图绑定。`run_portable.py` 负责递归状态、reset 和逐帧报告。`native_reference.py` 保留 task-level 对照路径。
 
 ## 4. App
 

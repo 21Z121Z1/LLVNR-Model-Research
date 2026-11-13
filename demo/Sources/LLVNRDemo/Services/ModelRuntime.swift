@@ -26,6 +26,16 @@ final class ModelRuntime {
               manifest.outputs.allSatisfy({$0.shape.count==4 && $0.shape.allSatisfy{$0>0} && $0.bytes==2*$0.shape.reduce(1,*)}) else {
             throw PipelineError.failure("模型输入输出清单无效")
         }
+        if (manifest.target_family == nil) != (manifest.target_arch == nil) {
+            throw PipelineError.failure("模型 ANE 目标字段不完整")
+        }
+        if let target = manifest.target_family {
+            let host = llvnr_host_ane_family()
+            guard host >= 2, target == host else {
+                let expected = manifest.target_arch ?? "family \(target)"
+                throw PipelineError.failure("模型目标 ANE \(expected) 与当前主机不匹配（host family \(host)）；请在本机重新导出并验证")
+            }
+        }
         for (name,hash) in manifest.files {
             guard !name.hasPrefix("/"),!name.split(separator:"/").contains("..") else {throw PipelineError.failure("模型资产路径无效")}
             let data=try Data(contentsOf:directory.appendingPathComponent(name))

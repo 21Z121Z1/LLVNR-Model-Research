@@ -12,7 +12,7 @@
 
 - App 只读取 `~/Library/Application Support/LLVNRDemo/CurrentModelKit`。
 - 公开 App 不镜像固件，不下载 IPSW，不自动解密或提取固件。
-- builder 只处理使用者已经生成的运行资产。
+- 包内 recovery/builder 工具处理使用者本地的 HWX、tuning 和运行资产；公开包本身不携带这些材料。
 - 模型、tuning 和哈希都留在本机；App 不上传资产包。
 - `.llvnrkit` 仍可能包含受 Apple 权利约束的派生数据，不应因为“格式变了”就公开上传。
 
@@ -25,9 +25,22 @@ LICENSE-ANEForge.txt
 KIT-DISTRIBUTION-NOTICE.md
 kit/
   README.md
+  PRIVACY.md
+  extract_ipsw_assets.py
+  recover_portable_sources.py
+  export_runtime_assets.py
+  export_research_assets.py
+  build_catalog.py
   build_kit.py
   verify_kit.py
-  export_research_assets.py
+  convert_local_model.py
+  sanitize_run_report.py
+  audit_release.py
+  check_readme_links.py
+  docs/
+  common/
+  research/
+  third_party/ANEForge/
   schema/kit.schema.json
 PACKAGE-VERIFICATION.json
 ```
@@ -38,9 +51,17 @@ PACKAGE-VERIFICATION.json
 
 ### 1. 准备本地研究资产
 
-你需要在私有的 LLVNR 研究目录中已经拥有以下内容：
+包内 `recover_portable_sources.py` 可以从本机提取目录的 `model.hwx` 生成
+portable source graph 和系数；它使用包内 sanitized synthetic layout metadata，
+不读取或分发模型权重。先生成私有 source graph：
 
-- 一套通过数值验证的 portable runtime assets，每个模型目录至少包含：
+```bash
+python3 kit/recover_portable_sources.py \
+  --extracted /path/to/private/llvnr-extracted \
+  --output /path/to/private/portable-sources
+```
+
+也可以直接使用已经通过数值验证的 portable runtime assets。每个模型目录至少包含：
   - `manifest.json`
   - `model.mil`
   - `weights.bin`
@@ -54,7 +75,17 @@ PACKAGE-VERIFICATION.json
 
 这些文件应由你自己的研究流程生成；公开 kit 不负责从固件取得它们。
 
-如果研究树兼容本实验的 `export_catalog_assets.py`，可以先运行：
+如果已有 portable source graph 和系数数组，公开 exporter 可以直接生成运行资产：
+
+```bash
+python3 kit/export_runtime_assets.py \
+  --sources /path/to/private/portable-sources \
+  --coefficient-root /path/to/private/coefficients \
+  --output /path/to/private/model-assets \
+  --validation ane
+```
+
+它会使用包内 vendored ANEForge 源码生成 `model.mil` / `weights.bin`，并在 Apple Silicon 上执行 CPU/ANE 验证。旧私有研究树仍可使用兼容桥接：
 
 ```bash
 python3 kit/export_research_assets.py \
@@ -62,20 +93,17 @@ python3 kit/export_research_assets.py \
   --assets-out /path/to/private/model-assets
 ```
 
-不传 `--models` 时默认导出本 Demo 的 12 个 V63 后摄配置。也可以显式指定部分模型：
+`recover_portable_sources.py` 负责 `model.hwx` → portable source graph；
+`export_runtime_assets.py` 只接受已经生成的 source graph，不会把未验证的图当作可运行模型。
+
+### 2. 生成 catalog 并构建 `.llvnrkit`
 
 ```bash
-python3 kit/export_research_assets.py \
-  --research-root /path/to/private/llvnr_port \
-  --assets-out /path/to/private/model-assets \
-  --models LLV-HD-Wide-2x-v0.3.0_2304x1296
-```
+python3 kit/build_catalog.py \
+  --extracted /path/to/private/llvnr-extracted \
+  --assets /path/to/private/model-assets \
+  --output /path/to/private/catalog
 
-研究导出器不在本公开包内；桥接脚本只调用你本地已有的 `export_catalog_assets.py`。
-
-### 2. 构建 `.llvnrkit`
-
-```bash
 python3 kit/build_kit.py \
   --assets /path/to/private/model-assets \
   --catalog /path/to/private/catalog \
@@ -91,7 +119,15 @@ builder 会：
 - 拒绝 `.hwx`、`.net`、`.weights`、`.shape`、`.espressif` 等原始固件文件；
 - 生成 `kit.json`，默认同时生成同名 ZIP。
 
-可用 `--allow-partial` 构建只含部分模型的资产包。默认要求 catalog 中的每个模型都存在。
+可用 `--allow-partial` 构建只含部分模型的资产包。默认要求 catalog 中的每个模型都存在。也可以把上面的步骤交给：
+
+```bash
+python3 kit/convert_local_model.py \
+  --extracted /path/to/private/llvnr-extracted \
+  --work /path/to/private/llvnr-work \
+  --output /path/to/private/LLVNR-local.llvnrkit
+# 或直接给本地 OTA：--ota /path/to/local.aea
+```
 
 ### 3. 先验证，再导入
 
@@ -166,6 +202,9 @@ LLVNR-local.llvnrkit/
 - 本构建是 ad-hoc 测试签名，不是 Developer ID 签名，也没有 Apple 公证。
 - 网络下载后，Gatekeeper 可能要求先尝试打开，再到“系统设置 → 隐私与安全性”允许打开。
 - 相机权限和本地文件访问由目标 Mac 管理。
+- H13 之外的 ANE 代际尚未在目标硬件上验证；不要把 compile-only 的 `rc=0` 当作支持证据。
+- 新导出的 manifest 会记录 `target_family` / `target_arch`；App 会在目标代际不匹配时拒绝加载。
+- 分享运行报告前使用 `kit/sanitize_run_report.py`；详见包内 `kit/PRIVACY.md`。
 
 ## 不应进入公开包的素材
 

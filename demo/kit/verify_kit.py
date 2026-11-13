@@ -20,6 +20,8 @@ from pathlib import Path, PurePosixPath
 
 RAW_SUFFIXES = {".hwx", ".net", ".weights", ".shape", ".espressif"}
 MAX_ARCHIVE_BYTES = 32 * 1024 * 1024 * 1024
+MAX_ARCHIVE_MEMBERS = 100_000
+MAX_MEMBER_PATH = 4096
 
 
 def digest(path: Path) -> str:
@@ -117,9 +119,24 @@ def verify(root: Path) -> dict:
     catalog_models = catalog.get("models")
     if not isinstance(catalog_models, list):
         raise ValueError("catalog models are missing")
+    catalog_ids = [entry.get("id") for entry in catalog_models]
+    if len(catalog_ids) != len(set(catalog_ids)):
+        raise ValueError("catalog model IDs are duplicated")
     catalog_by_id = {entry.get("id"): entry for entry in catalog_models}
     if set(model_ids) != set(catalog_by_id):
         raise ValueError("kit model IDs and catalog model IDs differ")
+
+    catalog_files = catalog.get("files")
+    if not isinstance(catalog_files, dict):
+        raise ValueError("catalog file inventory is missing")
+    for relative, expected in catalog_files.items():
+        safe_relative(relative)
+        kit_relative = f"Catalog/{relative}"
+        if kit_relative not in files:
+            raise ValueError(f"catalog file is not in kit inventory: {relative}")
+        actual = files[kit_relative]
+        if actual.get("sha256") != expected.get("sha256") or actual.get("bytes") != expected.get("bytes"):
+            raise ValueError(f"catalog file record mismatch: {relative}")
 
     model_records = kit.get("models")
     if not isinstance(model_records, dict) or set(model_records) != set(model_ids):
@@ -144,6 +161,15 @@ def verify(root: Path) -> dict:
         manifest = read_json(manifest_path)
         if manifest.get("model_id") != model_id:
             raise ValueError(f"manifest model_id mismatch: {model_id}")
+        target_family = manifest.get("target_family")
+        target_arch = manifest.get("target_arch")
+        if (target_family is None) != (target_arch is None):
+            raise ValueError(f"target fields are incomplete: {model_id}")
+        if target_family is not None:
+            if isinstance(target_family, bool) or not isinstance(target_family, int) or target_family < 2:
+                raise ValueError(f"target family is invalid: {model_id}")
+            if not isinstance(target_arch, str) or not target_arch:
+                raise ValueError(f"target architecture is invalid: {model_id}")
         if manifest.get("source_model_sha256") != record.get("source_model_sha256"):
             raise ValueError(f"source model mismatch: {model_id}")
         if manifest.get("source_model_sha256") != catalog_by_id[model_id].get("sha256"):
@@ -174,14 +200,29 @@ def verify(root: Path) -> dict:
 def extract_archive(archive: Path, destination: Path) -> None:
     with zipfile.ZipFile(archive) as zf:
         members = zf.infolist()
-        total = sum(member.file_size for member in members)
-        if total > MAX_ARCHIVE_BYTES:
-            raise ValueError("ZIP expands beyond the verifier size limit")
+        if len(members) > MAX_ARCHIVE_MEMBERS:
+            raise ValueError("ZIP contains too many members")
+        total = 0
+        seen: set[str] = set()
         for member in members:
-            safe_relative(member.filename.rstrip("/"))
+            name = member.filename
+            if len(name) > MAX_MEMBER_PATH:
+                raise ValueError("ZIP member path is too long")
+            if name in seen:
+                raise ValueError(f"duplicate ZIP member: {name}")
+            seen.add(name)
+            if member.flag_bits & 0x1:
+                raise ValueError(f"encrypted ZIP member is not allowed: {name}")
+            if member.file_size < 0 or member.file_size > MAX_ARCHIVE_BYTES:
+                raise ValueError(f"ZIP member is too large: {name}")
+            total += member.file_size
+            if total > MAX_ARCHIVE_BYTES:
+                raise ValueError("ZIP expands beyond the verifier size limit")
+            safe_relative(name.rstrip("/"))
             mode = member.external_attr >> 16
             if stat.S_ISLNK(mode):
-                raise ValueError(f"symlink in ZIP is not allowed: {member.filename}")
+                raise ValueError(f"symlink in ZIP is not allowed: {name}")
+        destination.mkdir(parents=True, exist_ok=True)
         for member in members:
             target = destination / safe_relative(member.filename.rstrip("/"))
             if member.is_dir():
@@ -195,9 +236,10 @@ def extract_archive(archive: Path, destination: Path) -> None:
 def locate_kit_root(extracted: Path) -> Path:
     if (extracted / "kit.json").is_file():
         return extracted
-    candidates = [path for path in extracted.iterdir() if path.is_dir() and (path / "kit.json").is_file()]
-    if len(candidates) != 1:
-        raise ValueError("ZIP must contain exactly one kit directory")
+    children = [path for path in extracted.iterdir() if not path.name.startswith(".")]
+    candidates = [path for path in children if path.is_dir() and (path / "kit.json").is_file()]
+    if len(candidates) != 1 or len(children) != 1:
+        raise ValueError("ZIP must contain exactly one kit directory and no sibling files")
     return candidates[0]
 
 

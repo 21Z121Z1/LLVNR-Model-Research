@@ -4,7 +4,7 @@ LLVNR H19 低光降噪模型的本地研究、格式解析、权重解码、图�
 
 本仓库不提供模型权重，也不提供可直接运行的模型产物。模型、tuning 和运行资产由使用者从自己有权使用的本地材料生成。
 
-**快速入口：** [LLVNR Demo](#llvnr-demo) · [模型提取](#从本地-ipswota-提取模型) · [模型原理图](#模型原理图) · [转换流程](#转换流程) · [v1.0 Release](https://github.com/21Z121Z1/LLVNR-Model-Research/releases/tag/v1.0)
+**快速入口：** [LLVNR Demo](#llvnr-demo) · [模型提取](#从本地-ipswota-提取模型) · [模型原理图](#模型原理图) · [转换流程](#转换流程) · [图恢复工具](#3-恢复全帧图) · [ANE 支持矩阵](docs/ANE-SUPPORT.md) · [隐私](PRIVACY.md) · [v1.0 Release](https://github.com/21Z121Z1/LLVNR-Model-Research/releases/tag/v1.0)
 
 ## 目录
 
@@ -16,6 +16,9 @@ LLVNR H19 低光降噪模型的本地研究、格式解析、权重解码、图�
 - [仓库结构](#仓库结构)
 - [v1.0](#v10)
 - [文档](#文档)
+- [隐私与清理](PRIVACY.md)
+- [ANE 支持矩阵](docs/ANE-SUPPORT.md)
+- [故障排查](docs/TROUBLESHOOTING.md)
 - [License](#license)
 
 ## 模型范围
@@ -169,43 +172,85 @@ research/work/llvnr_taskflow.py
 
 ### 3. 恢复全帧图
 
-```text
-research/work/llvnr_port/graph/portable_ops.py
-research/work/llvnr_port/graph/portable_graph.py
-research/work/llvnr_port/graph/execute_numpy.py
-research/work/llvnr_port/graph/native_reference.py
-research/work/llvnr_port/graph/run_portable.py
-```
-
-把 535 个 task 调度转换为可复用的卷积、pool、PE、LUT、状态混合和输出节点。CPU 参考路径不依赖 ANE，可以先验证图、系数、形状和递归状态。
-
-### 4. 编译和运行
-
-```text
-research/work/llvnr_port/graph/metal_prefix.py
-research/work/llvnr_port/graph/precision_runtime.py
-research/work/llvnr_port/export_catalog_assets.py
-```
-
-ANE 路径依赖 Apple Silicon 上的私有 E5RT/Espresso 接口和可用的编译器运行时。精度敏感模型会拆出 Metal FP32 prefix，再将 denoiser 状态保存为 FP16。没有 ANE 时仍可使用 CPU reference。
-
-### 5. 打包本地资产
+公开恢复入口：
 
 ```bash
+python3 demo/kit/recover_portable_sources.py \
+  --extracted /path/to/private/llvnr-extracted \
+  --output /path/to/private/portable-sources
+```
+
+它扫描本地 `model.hwx`，从 task/register 和 coefficient codec 恢复系数，再按模型族生成
+`source_graph.json`。仓库只附带从 synthetic compiler probes 整理出的结构布局元数据
+（`research/work/llvnr_port/recovery_profiles.json.gz`），不附带模型权重、探针 HWX 或
+tuning。V63 的 12 个模型均走同一条恢复链；本地验证中 12/12 通过结构导出和 ANE
+synthetic-input 对比，Wide 2x 2304 的整图 CPU 输出与 native task CPU 完全一致。
+输出属于私有模型派生材料。
+
+核心模块：
+
+```text
+research/work/llvnr_port/recover_catalog.py       coefficient codecs and bounded recovery
+research/work/llvnr_port/graph/recovered_reference.py
+research/work/llvnr_port/graph/portable_graph.py
+research/work/llvnr_port/graph/wide1_graph.py
+research/work/llvnr_port/graph/superwide05_graph.py
+research/work/llvnr_port/graph/tele4_graph.py
+research/work/llvnr_port/graph/tele8_graph.py
+research/work/llvnr_port/graph/large_canvas_graph.py
+```
+
+把每个模型的 task 调度转换为可复用的卷积、pool、PE、LUT、状态混合和输出节点。CPU
+参考路径不依赖 ANE，可以先验证图、系数、形状和递归状态。
+
+### 4. 生成 portable runtime assets
+
+公开 exporter 从使用者本地生成的 portable source graph 和系数数组开始：
+
+```bash
+python3 demo/kit/export_runtime_assets.py \
+  --sources /path/to/private/portable-sources \
+  --coefficient-root /path/to/private/coefficients \
+  --output /path/to/private/model-assets \
+  --validation ane
+```
+
+它会用仓库内 vendored 的 ANEForge 最小 MIT 子集生成 `model.mil` / `weights.bin`，并在 Apple Silicon 上执行 CPU/ANE synthetic-input 对比，写出每个模型的 `export_validation.json`。精度敏感模型会拆出 Metal FP32 prefix，再将 denoiser 状态保存为 FP16。
+
+`recover_portable_sources.py` 负责 `model.hwx` → portable source graph；exporter 只接受
+已经生成的 source graph，不会把未经验证的图伪装成可运行模型。输入、系数、哈希或画布
+不匹配时会 fail closed。
+
+### 5. 生成 catalog 和打包本地资产
+
+```bash
+python3 demo/kit/build_catalog.py \
+  --extracted /path/to/private/llvnr-extracted \
+  --assets /path/to/private/model-assets \
+  --output /path/to/private/catalog
+
 python3 demo/kit/build_kit.py \
   --assets /path/to/private/model-assets \
   --catalog /path/to/private/catalog \
   --output /path/to/private/LLVNR-local.llvnrkit \
-  --license /path/to/LICENSE-ANEForge.txt
-```
+  --license third_party/ANEForge/LICENSE
 
-生成后必须验证：
-
-```bash
 python3 demo/kit/verify_kit.py /path/to/private/LLVNR-local.llvnrkit
 ```
 
-builder/verifier 会检查模型 manifest、tuning、文件哈希、模型 ID、ZIP 路径和夹带文件。资产包属于本地私人物料，不应上传到公开仓库。
+也可以使用一条命令：
+
+```bash
+python3 demo/kit/convert_local_model.py \
+  --extracted /path/to/private/llvnr-extracted \
+  --work /path/to/private/llvnr-work \
+  --output /path/to/private/LLVNR-local.llvnrkit
+# 或直接给本地 OTA：
+# --ota /path/to/local.aea
+# 也可以继续用 --sources 复用已经恢复好的私有 source graph。
+```
+
+catalog builder 会从 `ModelInfo.Name` 自动绑定 tuning、模型名、画布和源模型 SHA-256；builder/verifier 会检查模型 manifest、tuning、文件哈希、模型 ID、ZIP 路径和夹带文件。资产包属于本地私人物料，不应上传到公开仓库。工具细节见 [`demo/kit/README.md`](demo/kit/README.md)。
 
 ## LLVNR Demo
 
@@ -225,8 +270,11 @@ builder/verifier 会检查模型 manifest、tuning、文件哈希、模型 ID、
 ```text
 本地 IPSW / OTA
   -> extract_ipsw_assets.py
-  -> H19 解析、权重解码和全帧图重建
-  -> portable runtime assets + local catalog
+  -> recover_portable_sources.py
+  -> H19 解析、系数恢复和全帧图重建
+  -> portable source graph + coefficients
+  -> export_runtime_assets.py
+  -> build_catalog.py
   -> build_kit.py
   -> verify_kit.py
   -> LLVNR Demo
@@ -267,7 +315,7 @@ demo/
   Package.swift
   Sources/LLVNRDemo/        SwiftUI App、相机/视频、预览、状态和运行指标
   Sources/ANERuntime/       E5RT / Metal bridge
-  kit/                      extractor、builder、verifier、schema
+  kit/                      extractor、exporter、catalog builder、builder、verifier、schema
   script/                   App 构建、无权重打包和本地运行脚本
   README.md
   WEIGHTLESS_DISTRIBUTION.md
@@ -286,6 +334,8 @@ docs/
   DISTRIBUTION-POLICY.md
   LIMITATIONS.md
   RELEASE-v1.0.md
+  ANE-SUPPORT.md
+  TROUBLESHOOTING.md
 ```
 
 ## v1.0
@@ -298,6 +348,7 @@ Release tag 为 `v1.0`，App bundle 版本仍为 `0.4.0` build `6`。
 - SHA-256：`29ac50b69a96ead04f893883b6bcc7e474cd62b187767c8c99088cc1cac247a5`
 - App 为 ad-hoc 签名，不是 Developer ID 签名，也未 Apple 公证
 - 详细发布边界见 [docs/RELEASE-v1.0.md](docs/RELEASE-v1.0.md)
+- `v1.0` tag 保持冻结；当前 main 已加入公开 exporter、catalog builder、ANE 支持矩阵和隐私清理文档，后续二进制发布应使用新的 `v1.0.1`，不要移动已有 tag
 
 ```bash
 shasum -a 256 LLVNR-Weightless-0.4.0-build6-arm64-test-20261113-v1.0.zip
@@ -311,6 +362,9 @@ shasum -a 256 LLVNR-Weightless-0.4.0-build6-arm64-test-20261113-v1.0.zip
 - [分发边界](docs/DISTRIBUTION-POLICY.md)
 - [可复现性与限制](docs/LIMITATIONS.md)
 - [来源与个人信息清理记录](docs/SOURCE-PROVENANCE.md)
+- [ANE 支持矩阵](docs/ANE-SUPPORT.md)
+- [故障排查](docs/TROUBLESHOOTING.md)
+- [隐私与本地数据](PRIVACY.md)
 
 ## License
 

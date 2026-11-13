@@ -81,6 +81,8 @@ struct ModelManifest: Decodable {
     var source_model_sha256: String
     var source_graph_sha256: String
     var execution_profile: String?
+    var target_family: Int?
+    var target_arch: String?
     var files: [String: String]
     var inputs: [Port], outputs: [Port]
     var ane_inputs: [Port]?, ane_outputs: [Port]?

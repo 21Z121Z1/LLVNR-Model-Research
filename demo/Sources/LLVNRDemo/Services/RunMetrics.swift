@@ -54,11 +54,16 @@ final class RunMetrics {
                  "node_count":manifest.node_count,"coefficient_group_count":manifest.coefficient_group_count,
                  "model_files":manifest.files,"source_model_sha256":manifest.source_model_sha256,
                  "os":ProcessInfo.processInfo.operatingSystemVersionString,
-                 "host":ProcessInfo.processInfo.hostName,"start_utc":ISO8601DateFormatter().string(from:Date()),
+                 "start_utc":ISO8601DateFormatter().string(from:Date()),
                  "clock":"CM host clock; source PTS converted from capture synchronizationClock; CAMetalDrawable.presentedTime",
                  "source_clock_scope":source=="camera" ? "capture timestamp to drawable presentation; sensor exposure start not measured" : "paced replay release to drawable presentation; not physical camera latency",
                  "display_scope":"WindowServer drawable presentation timestamp; optical panel scan-out not measured",
-                 "statistics":"whole-run counters and timing histograms; fixed 0.05ms buckets, bounded memory; all raw frame records retained in JSONL"]
+                 "statistics":"whole-run counters and timing histograms; fixed 0.05ms buckets, bounded memory; all raw frame records retained in JSONL",
+                 "privacy":"shareable summary excludes hostname and local paths; use tools/sanitize_run_report.py before sharing"]
+        if ProcessInfo.processInfo.environment["LLVNR_INCLUDE_LOCAL_DIAGNOSTICS"] == "1" {
+            details["host"]=ProcessInfo.processInfo.hostName
+            details["run_directory"]=self.directory.path
+        }
         event("run_started",details)
     }
     func event(_ type: String,_ values: [String: Any] = [:]) {

@@ -24,11 +24,65 @@ from pathlib import Path
 KIT_FILES = (
     "README.md",
     "extract_ipsw_assets.py",
+    "recover_portable_sources.py",
+    "export_runtime_assets.py",
+    "export_research_assets.py",
+    "build_catalog.py",
     "build_kit.py",
     "verify_kit.py",
-    "export_research_assets.py",
+    "convert_local_model.py",
     "schema/kit.schema.json",
 )
+KIT_SUPPORT_FILES = {
+    "PRIVACY.md": "PRIVACY.md",
+    "docs/ANE-SUPPORT.md": "docs/ANE-SUPPORT.md",
+    "docs/TROUBLESHOOTING.md": "docs/TROUBLESHOOTING.md",
+    "tools/sanitize_run_report.py": "sanitize_run_report.py",
+    "tools/audit_release.py": "audit_release.py",
+    "tools/check_readme_links.py": "check_readme_links.py",
+    "common/PrecisionRuntime.mm": "common/PrecisionRuntime.mm",
+    "research/work/llvnr_port/graph/portable_graph.py": "research/work/llvnr_port/graph/portable_graph.py",
+    "research/work/llvnr_port/graph/portable_ops.py": "research/work/llvnr_port/graph/portable_ops.py",
+    "research/work/llvnr_port/graph/metal_prefix.py": "research/work/llvnr_port/graph/metal_prefix.py",
+    "research/work/llvnr_port/graph/precision_runtime.py": "research/work/llvnr_port/graph/precision_runtime.py",
+    "research/work/llvnr_port/graph/probe_execution_barriers.py": "research/work/llvnr_port/graph/probe_execution_barriers.py",
+    "research/work/llvnr_port/graph/run_portable.py": "research/work/llvnr_port/graph/run_portable.py",
+    "research/work/llvnr_port/graph/recovered_reference.py": "research/work/llvnr_port/graph/recovered_reference.py",
+    "research/work/llvnr_port/graph/native_reference.py": "research/work/llvnr_port/graph/native_reference.py",
+    "research/work/llvnr_port/graph/wide1_graph.py": "research/work/llvnr_port/graph/wide1_graph.py",
+    "research/work/llvnr_port/graph/superwide05_graph.py": "research/work/llvnr_port/graph/superwide05_graph.py",
+    "research/work/llvnr_port/graph/tele4_graph.py": "research/work/llvnr_port/graph/tele4_graph.py",
+    "research/work/llvnr_port/graph/tele8_graph.py": "research/work/llvnr_port/graph/tele8_graph.py",
+    "research/work/llvnr_port/graph/large_canvas_graph.py": "research/work/llvnr_port/graph/large_canvas_graph.py",
+    "research/work/llvnr_port/recovery_profiles.json.gz": "research/work/llvnr_port/recovery_profiles.json.gz",
+    "research/work/llvnr_port/recover_catalog.py": "research/work/llvnr_port/recover_catalog.py",
+    "research/work/llvnr_port/sparse_transpose_codec.py": "research/work/llvnr_port/sparse_transpose_codec.py",
+    "research/work/h19_dense_codec.py": "research/work/h19_dense_codec.py",
+    "research/work/h19_sparse_codec.py": "research/work/h19_sparse_codec.py",
+    "research/work/h19_sparse_extended.py": "research/work/h19_sparse_extended.py",
+    "research/work/h19_sparse_stream.py": "research/work/h19_sparse_stream.py",
+    "research/work/h19_sparse_unpack.py": "research/work/h19_sparse_unpack.py",
+    "research/work/h19_sparse_probe.py": "research/work/h19_sparse_probe.py",
+    "research/work/h19_deconv_probe.py": "research/work/h19_deconv_probe.py",
+    "research/work/h19_statewalk.py": "research/work/h19_statewalk.py",
+    "research/work/h19_weightlib.py": "research/work/h19_weightlib.py",
+    "research/work/llvnr_ir.py": "research/work/llvnr_ir.py",
+    "research/work/llvnr_taskflow.py": "research/work/llvnr_taskflow.py",
+    "third_party/ANEForge/LICENSE": "third_party/ANEForge/LICENSE",
+    "third_party/ANEForge/NOTICE": "third_party/ANEForge/NOTICE",
+    "third_party/ANEForge/README.md": "third_party/ANEForge/README.md",
+    "third_party/ANEForge/aneforge/__init__.py": "third_party/ANEForge/aneforge/__init__.py",
+    "third_party/ANEForge/aneforge/_compile.py": "third_party/ANEForge/aneforge/_compile.py",
+    "third_party/ANEForge/aneforge/_runtime.py": "third_party/ANEForge/aneforge/_runtime.py",
+    "third_party/ANEForge/aneforge/_blob.py": "third_party/ANEForge/aneforge/_blob.py",
+    "third_party/ANEForge/aneforge/_circuit.py": "third_party/ANEForge/aneforge/_circuit.py",
+    "third_party/ANEForge/aneforge/_targets.py": "third_party/ANEForge/aneforge/_targets.py",
+    "third_party/ANEForge/aneforge/build.py": "third_party/ANEForge/aneforge/build.py",
+    "third_party/ANEForge/aneforge/graph.py": "third_party/ANEForge/aneforge/graph.py",
+    "third_party/ANEForge/aneforge/_lib/build.sh": "third_party/ANEForge/aneforge/_lib/build.sh",
+    "third_party/ANEForge/aneforge/_lib/ane_e5rt_dispatch.mm": "third_party/ANEForge/aneforge/_lib/ane_e5rt_dispatch.mm",
+    "third_party/ANEForge/aneforge/_lib/e5rt_api.h": "third_party/ANEForge/aneforge/_lib/e5rt_api.h",
+}
 FORBIDDEN_NAMES = {
     "weights.bin",
     "model.mil",
@@ -136,9 +190,13 @@ def main() -> int:
         raise RuntimeError(f"weightless App not found: {app}")
     if not readme.is_file() or not license_file.is_file():
         raise RuntimeError("README or runtime license is missing")
+    project_root = project.parent.resolve()
     for relative in KIT_FILES:
         if not (kit_dir / relative).is_file():
             raise RuntimeError(f"kit source file missing: {relative}")
+    for source_relative in KIT_SUPPORT_FILES:
+        if not (project_root / source_relative).is_file():
+            raise RuntimeError(f"kit support file missing: {source_relative}")
 
     assert_no_model_assets(app)
     source_inventory = inventory(app)
@@ -155,7 +213,10 @@ def main() -> int:
             raise RuntimeError(f"dependency is not self-contained: {dependency}")
 
     output.mkdir(parents=True)
-    staged_app = output / app.name
+    # Keep the public package name stable even when the locally verified build
+    # was produced under a temporary name such as "... Final.app".
+    display_name = "LLVNR Demo Weightless.app"
+    staged_app = output / display_name
     run("/usr/bin/ditto", str(app), str(staged_app))
     if inventory(staged_app) != source_inventory:
         raise RuntimeError("staged App differs from source App")
@@ -167,6 +228,23 @@ def main() -> int:
         destination = staged_kit / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(kit_dir / relative, destination)
+    for source_relative, destination_relative in KIT_SUPPORT_FILES.items():
+        destination = staged_kit / destination_relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(project_root / source_relative, destination)
+    # The repository README links to the repository root; the packaged README
+    # lives inside kit/ and carries the same support files beside it.
+    def rewrite_packaged_paths(text: str) -> str:
+        text = text.replace("../../PRIVACY.md", "PRIVACY.md")
+        text = text.replace("../../docs/ANE-SUPPORT.md", "docs/ANE-SUPPORT.md")
+        for name in ("sanitize_run_report.py", "audit_release.py", "check_readme_links.py"):
+            text = text.replace(f"tools/{name}", name)
+        return text
+
+    for relative in ("README.md", "PRIVACY.md", "docs/TROUBLESHOOTING.md"):
+        staged_path = staged_kit / relative
+        if staged_path.is_file():
+            staged_path.write_text(rewrite_packaged_paths(staged_path.read_text()))
 
     (output / "KIT-DISTRIBUTION-NOTICE.md").write_text(
         "# Distribution notice\n\n"
@@ -196,6 +274,8 @@ def main() -> int:
         "generated_kit_included": False,
         "local_identity_scan": "passed",
         "kit_tools": list(KIT_FILES),
+        "kit_support_files": list(KIT_SUPPORT_FILES.values()),
+        "app_name": display_name,
         "source_app_files_sha256": source_inventory,
         "kit_tools_sha256": {
             relative: sha256(staged_kit / relative) for relative in KIT_FILES
@@ -222,7 +302,7 @@ def main() -> int:
             raise RuntimeError("archive roundtrip differs from staged package")
         assert_no_model_assets(restored)
         assert_no_local_identity(restored)
-        run("/usr/bin/codesign", "--verify", "--deep", "--strict", str(restored / app.name))
+        run("/usr/bin/codesign", "--verify", "--deep", "--strict", str(restored / display_name))
 
     checksum_file.write_text(f"{sha256(archive)}  {archive.name}\n")
     print(

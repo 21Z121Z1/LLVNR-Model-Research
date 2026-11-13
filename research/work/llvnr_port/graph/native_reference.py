@@ -97,9 +97,26 @@ class NativeReference:
                             raise ValueError("unprobed padding origin before controlled source")
                     value = value[:, start_y:start_y + target[1], start_x:start_x + target[2]]
                 else:
-                    ph = (target[1] - x.shape[1]) // 2
-                    pw = (target[2] - x.shape[2]) // 2
-                    value = np.pad(x, ((0, 0), (ph, ph), (pw, pw)), mode="edge" if cfg & 0x40000 else "constant")
+                    delta_h = target[1] - x.shape[1]
+                    delta_w = target[2] - x.shape[2]
+                    if min(delta_h, delta_w) < 0:
+                        raise ValueError("padding identity target is smaller than its source")
+                    # Most compiler padding layouts are symmetric. For an odd
+                    # remainder, the task geometry identifies the leading edge;
+                    # assign the single extra row/column there instead of
+                    # silently dropping it with floor division.
+                    if delta_h % 2:
+                        top = min(task["geometry"].get("pad_top", 0), delta_h)
+                        bottom = delta_h - top
+                    else:
+                        top = bottom = delta_h // 2
+                    if delta_w % 2:
+                        left = min(task["geometry"].get("pad_left", 0), delta_w)
+                        right = delta_w - left
+                    else:
+                        left = right = delta_w // 2
+                    value = np.pad(x, ((0, 0), (top, bottom), (left, right)),
+                                   mode="edge" if cfg & 0x40000 else "constant")
             elif primitive in ("conv_transpose", "conv_transpose_then_lut", "conv_transpose_haar", "nearest_replication"):
                 if primitive in ("conv_transpose", "conv_transpose_then_lut"):
                     geometry = task["geometry"]

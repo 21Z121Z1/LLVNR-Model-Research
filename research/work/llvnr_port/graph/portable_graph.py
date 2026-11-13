@@ -57,7 +57,7 @@ def source_plan(reference):
         lut_group = reference.groups_by_offset[lut_address["offset"]].stem
         lut = reference.luts[lut_group]
         return add(name, "affine_sigmoid", [x], bias=fp16(r.get("1244", 0)),
-                   scale=fp16(r.get("1245", 0x3C00)), output_scale=lut["scale"], native_task=task,
+                   scale=fp16(r.get("1245", 0x3C00)), output_scale=lut.get("scale", 1.0), native_task=task,
                    activation_lut_hex=reference.activation_tables[lut_group].tobytes().hex())
 
     def binary(name, op, x, y):
@@ -66,10 +66,11 @@ def source_plan(reference):
     def channel(name, x, index):
         return add(name, "channel", [x], index=index)
 
-    for name in ("his_frame", "cur_frame"):
-        add(name, "input", [], shape=[1, 6, 648, 1152])
-    for name in ("dnr_zoom_map", "fusion_zoom_map"):
-        add(name, "input", [], shape=[1, 1, 324, 576])
+    for name in ("his_frame", "cur_frame", "dnr_zoom_map", "fusion_zoom_map"):
+        view = getattr(reference, "port_views", {}).get(name)
+        if view is None:
+            raise ValueError(f"reference has no external port view: {name}")
+        add(name, "input", [], shape=[1, *view["shape_chw"]])
 
     conv("his_low", "his_frame", "K3B459", 0, stride=2, pad=0)
     conv("cur_low", "cur_frame", "K3B459", 3, stride=2, pad=0)
@@ -173,18 +174,22 @@ def source_plan(reference):
     conv("output_refine_1", "output_refine_input", "KD6494", 372, pad=0)
     conv("output_refine_2", "output_refine_1", "K94C099", 373)
     conv("out_yuv", "output_refine_2", "K76C518", 534)
-    files = {}
     used = {node["group"] for node in nodes if "group" in node}
-    for group in sorted(used):
-        weight_path = next((PORT / folder / group / "weights.npy" for folder in
-                            ("dense_weights", "special_weights", "deconv_weights")
-                            if (PORT / folder / group / "weights.npy").is_file()))
-        bias_path = weight_path.with_name("bias.npy")
-        files[group] = {"weights": str(weight_path.relative_to(PORT)),
-                        "bias": str(bias_path.relative_to(PORT)) if bias_path.exists() else None,
-                        "weights_sha256_fp16": hashlib.sha256(np.load(weight_path).tobytes()).hexdigest(),
-                        "bias_sha256_fp16": hashlib.sha256(np.load(bias_path).tobytes()).hexdigest() if bias_path.exists() else None}
-    return {"schema_version": 1, "model_sha256": reference.ir["model_sha256"], "coefficients": files,
+    if hasattr(reference, "coefficient_records"):
+        files = reference.coefficient_records(used)
+    else:
+        files = {}
+        for group in sorted(used):
+            weight_path = next((PORT / folder / group / "weights.npy" for folder in
+                                ("dense_weights", "special_weights", "deconv_weights")
+                                if (PORT / folder / group / "weights.npy").is_file()))
+            bias_path = weight_path.with_name("bias.npy")
+            files[group] = {"weights": str(weight_path.relative_to(PORT)),
+                            "bias": str(bias_path.relative_to(PORT)) if bias_path.exists() else None,
+                            "weights_sha256_fp16": hashlib.sha256(np.load(weight_path).tobytes()).hexdigest(),
+                            "bias_sha256_fp16": hashlib.sha256(np.load(bias_path).tobytes()).hexdigest() if bias_path.exists() else None}
+    return {"schema_version": 1, "model_id": getattr(reference, "model_id", None),
+            "model_sha256": reference.ir["model_sha256"], "coefficients": files,
             "execution_profile": "metal_state_ane_denoiser",
             "nodes": nodes, "outputs": ["out_yuv", "state_yuv", "state_weight_band0"],
             "validation_status": "candidate whole-frame graph, compare with native task schedule and H13 before acceptance"}

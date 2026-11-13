@@ -7,6 +7,8 @@
 #include <string>
 #include <unordered_map>
 #include <cstring>
+#include <cstdlib>
+#include <sys/sysctl.h>
 
 extern "C" {
 struct ane_e5rt_program;
@@ -84,6 +86,26 @@ void *llvnr_compile(const char *model_directory, const char *cache_directory) {
         return model;
     }
 }
+int llvnr_host_ane_family(void) {
+    size_t size = 0;
+    if (sysctlbyname("machdep.cpu.brand_string", nullptr, &size, nullptr, 0) != 0 || size == 0) return -1;
+    char *brand = static_cast<char *>(std::calloc(size + 1, 1));
+    if (!brand) return -1;
+    const int result = sysctlbyname("machdep.cpu.brand_string", brand, &size, nullptr, 0);
+    if (result != 0) { std::free(brand); return -1; }
+    const char *marker = std::strstr(brand, "Apple M");
+    const int generation = marker ? std::atoi(marker + 7) : 0;
+    std::free(brand);
+    switch (generation) {
+        case 1: return 2; // M1 / H13
+        case 2: return 3; // M2 / H14
+        case 3: return 4; // M3 / H15
+        case 4: return 5; // M4 / A16 tier
+        case 5: return 5; // M5 / A16 tier
+        default: return -1;
+    }
+}
+
 void *llvnr_input(void *m, const char *p, size_t *b) {
     auto model=static_cast<ModelHandle*>(m);auto found=model->inputs.find(p);
     if(found==model->inputs.end())return nullptr;
