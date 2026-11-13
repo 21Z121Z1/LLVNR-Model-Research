@@ -4,6 +4,20 @@ LLVNR H19 低光降噪模型的本地研究、格式解析、权重解码、图�
 
 本仓库不提供模型权重，也不提供可直接运行的模型产物。模型、tuning 和运行资产由使用者从自己有权使用的本地材料生成。
 
+**快速入口：** [LLVNR Demo](#llvnr-demo) · [模型提取](#从本地-ipswota-提取模型) · [模型原理图](#模型原理图) · [转换流程](#转换流程) · [v1.0 Release](https://github.com/21Z121Z1/LLVNR-Model-Research/releases/tag/v1.0)
+
+## 目录
+
+- [模型范围](#模型范围)
+- [从本地 IPSW/OTA 提取模型](#从本地-ipswota-提取模型)
+- [模型原理图](#模型原理图)
+- [转换流程](#转换流程)
+- [LLVNR Demo](#llvnr-demo)
+- [仓库结构](#仓库结构)
+- [v1.0](#v10)
+- [文档](#文档)
+- [License](#license)
+
 ## 模型范围
 
 当前研究针对 V63 后摄 LLVNR 的 12 个逻辑配置：
@@ -193,14 +207,70 @@ python3 demo/kit/verify_kit.py /path/to/private/LLVNR-local.llvnrkit
 
 builder/verifier 会检查模型 manifest、tuning、文件哈希、模型 ID、ZIP 路径和夹带文件。资产包属于本地私人物料，不应上传到公开仓库。
 
+## LLVNR Demo
+
+`demo/` 是 LLVNR 研究的 macOS 参考运行器，也是从本地资产到实际画面的端到端验收界面。它不提供模型权重或可直接运行的模型产物；App 只导入使用者从本地材料生成、并通过 verifier 检查的 `.llvnrkit`。
+
+主要功能：
+
+- 导入本地模型资产包，支持未解压目录和 builder 生成的 ZIP；
+- 使用本地摄像头实时运行模型，也可处理视频并导出结果；
+- 在原始画面、处理后、滑动对比和并排对比之间切换，并同步缩放查看细节；
+- 调整 DNR、Fusion 和 history update weight，暂停时重算当前帧；
+- 保存处理前后的帧，查看帧率、队列、推理耗时和到达显示延迟；
+- 重置递归时间状态，复现不同片段或参数从冷启动开始的行为。
+
+从本地材料到 Demo 的运行链是：
+
+```text
+本地 IPSW / OTA
+  -> extract_ipsw_assets.py
+  -> H19 解析、权重解码和全帧图重建
+  -> portable runtime assets + local catalog
+  -> build_kit.py
+  -> verify_kit.py
+  -> LLVNR Demo
+  -> 相机实时预览 / 视频处理与对比
+```
+
+### 运行已发布的 Demo
+
+1. 从 [v1.0 Release](https://github.com/21Z121Z1/LLVNR-Model-Research/releases/tag/v1.0) 下载无权重 App 包。
+2. 使用 [v1.0](#v10) 中的 SHA-256 校验下载文件。
+3. 按[转换流程](#转换流程)在私有目录生成并验证 `.llvnrkit`。
+4. 启动 App，选择 `File → 导入模型资产包…`，再导入本地 kit。
+
+该构建是 Apple Silicon 上的 ad-hoc 测试签名，不是 Developer ID 签名，也未 Apple 公证。首次打开时可能需要在“系统设置 → 隐私与安全性”中允许运行。
+
+### 从源码构建
+
+需要 macOS 14+、Swift 6 和 Apple Silicon：
+
+```bash
+cd demo
+./script/build_and_run.sh
+```
+
+脚本会构建并打开 `dist/LLVNR Demo.app`。只构建不启动可以使用 `./script/build_and_run.sh --build-only`。无权重打包、命令行导入和签名说明见 [demo/WEIGHTLESS_DISTRIBUTION.md](demo/WEIGHTLESS_DISTRIBUTION.md)。
+
+### Demo 的边界
+
+- ANE 路径依赖 Apple Silicon 上的私有 E5RT/Espresso 接口，系统更新可能改变行为；
+- 相机格式、延迟、功耗和不同 M 系列芯片的兼容性需要在目标机器上实测；
+- 视频反向拖动、参数重复性和 HDR 预览属于交互与显示链路的验收项；
+- Demo 用于模型、状态和运行时的功能对比，不替代原机 ISP、HDR 或显示管线验收。
+
 ## 仓库结构
 
 ```text
 demo/
-  Sources/LLVNRDemo/        macOS App、相机/视频、预览和状态管线
+  Package.swift
+  Sources/LLVNRDemo/        SwiftUI App、相机/视频、预览、状态和运行指标
   Sources/ANERuntime/       E5RT / Metal bridge
   kit/                      extractor、builder、verifier、schema
-  script/                   App 构建和无权重打包
+  script/                   App 构建、无权重打包和本地运行脚本
+  README.md
+  WEIGHTLESS_DISTRIBUTION.md
 common/                     App 精度运行时源文件
 
 research/work/
@@ -218,25 +288,20 @@ docs/
   RELEASE-v1.0.md
 ```
 
-## 构建 App
-
-需要 macOS 14+、Swift 6 和 Apple Silicon：
-
-```bash
-cd demo
-swift build -c release --product LLVNRDemo
-```
-
-无权重 App 只保留运行器和 UI，模型必须通过本地 kit 导入。发布扫描会拒绝本地路径、模型后缀、tuning、图片/视频、证书和 provisioning 文件。
-
 ## v1.0
 
 Release tag 为 `v1.0`，App bundle 版本仍为 `0.4.0` build `6`。
 
-- Asset：`LLVNR-Weightless-0.4.0-build6-arm64-test-20261113-v1.0.zip`
+- Release：[`v1.0`](https://github.com/21Z121Z1/LLVNR-Model-Research/releases/tag/v1.0)
+- Asset：[`LLVNR-Weightless-0.4.0-build6-arm64-test-20261113-v1.0.zip`](https://github.com/21Z121Z1/LLVNR-Model-Research/releases/download/v1.0/LLVNR-Weightless-0.4.0-build6-arm64-test-20261113-v1.0.zip)
+- Checksum：[`LLVNR-Weightless-0.4.0-build6-arm64-test-20261113-v1.0.sha256`](https://github.com/21Z121Z1/LLVNR-Model-Research/releases/download/v1.0/LLVNR-Weightless-0.4.0-build6-arm64-test-20261113-v1.0.sha256)
 - SHA-256：`29ac50b69a96ead04f893883b6bcc7e474cd62b187767c8c99088cc1cac247a5`
 - App 为 ad-hoc 签名，不是 Developer ID 签名，也未 Apple 公证
 - 详细发布边界见 [docs/RELEASE-v1.0.md](docs/RELEASE-v1.0.md)
+
+```bash
+shasum -a 256 LLVNR-Weightless-0.4.0-build6-arm64-test-20261113-v1.0.zip
+```
 
 ## 文档
 
